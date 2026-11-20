@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lluvia de ideas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,700;12..96,800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#EEF3FB;--ink:#101A3A;--mut:#5B6585;--card:#fff;--acc:#2B59FF;--line:#D3DCF0}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Bricolage Grotesque",system-ui,sans-serif;min-height:100vh}
+main{max-width:1100px;margin:0 auto;padding:24px 20px 40px}
+h1{font-size:clamp(1.7rem,4.5vw,3rem);line-height:1.1;margin:0 0 8px;font-weight:800;letter-spacing:-.02em}
+p{margin:0 0 16px;color:var(--mut)}
+small{color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px}
+.row{display:flex;gap:10px}
+input,button{font:inherit;border-radius:12px;padding:14px 16px;border:1px solid var(--line)}
+input{flex:1;min-width:0;background:#fff;color:var(--ink)}
+button{background:var(--acc);color:#fff;border-color:var(--acc);font-weight:700;cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}
+:focus-visible{outline:3px solid #FF7A00;outline-offset:2px}
+.hidden{display:none!important}
+.top{display:flex;gap:28px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:20px}
+.top .q{flex:1;min-width:260px}
+#qrBox{text-align:center;max-width:220px}
+#qr{background:#fff;padding:12px;border-radius:14px;border:1px solid var(--line);display:inline-block;line-height:0}
+#link{display:block;margin-top:8px;word-break:break-all;font-size:.8rem}
+#msg{display:block;margin-top:10px;min-height:1.2em}
+#cloud{position:relative;min-height:58vh;margin-top:20px;overflow:hidden;border-radius:22px;background:#fff;border:1px solid var(--line)}
+#empty{position:absolute;inset:0;display:grid;place-items:center;color:var(--mut);text-align:center;padding:20px}
+.w{position:absolute;white-space:nowrap;font-weight:800;line-height:1;letter-spacing:-.01em;
+  transform:translate(-50%,-50%);
+  transition:left .7s ease,top .7s ease,font-size .5s ease;
+  animation:pop .5s backwards,float 6s ease-in-out infinite alternate;animation-delay:0s,var(--d)}
+@keyframes pop{from{opacity:0;scale:.2}to{opacity:1;scale:1}}
+@keyframes float{from{margin-top:-7px}to{margin-top:7px}}
+@media (prefers-reduced-motion:reduce){.w{animation:none;transition:none}}
+#err{color:#B3261E;font-weight:700}
+</style>
+</head>
+<body>
+<main>
+
+  <!-- Pantalla 1: crear la pregunta -->
+  <section id="crearV" class="card hidden">
+    <h1>Lluvia de ideas</h1>
+    <p>Escribí una pregunta. Se genera un QR y cada persona responde con hasta 3 palabras.</p>
+    <div class="row">
+      <input id="pregunta" maxlength="200" placeholder="Ej: ¿Qué palabra define a nuestro equipo?" autocomplete="off">
+      <button id="crear">Crear sala</button>
+    </div>
+  </section>
+
+  <!-- Pantalla 2: sala (anfitrión o participante) -->
+  <section id="salaV" class="hidden">
+    <div class="top">
+      <div class="q">
+        <small id="rol"></small>
+        <h1 id="q"></h1>
+        <small id="count"></small>
+      </div>
+      <div id="qrBox" class="hidden">
+        <div id="qr"></div>
+        <small id="link"></small>
+      </div>
+    </div>
+
+    <div id="partBox" class="card hidden">
+      <div class="row">
+        <input id="palabra" maxlength="30" placeholder="Una palabra" autocomplete="off">
+        <button id="enviar">Enviar palabra</button>
+      </div>
+      <small id="msg"></small>
+    </div>
+
+    <div id="cloud"><div id="empty">Todavía no hay palabras. Escaneá el QR y mandá la primera.</div></div>
+  </section>
+
+  <p id="err"></p>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {getAuth,signInAnonymously} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {getFirestore,doc,setDoc,onSnapshot,collection,serverTimestamp}
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+/* ====== PEGÁ ACÁ LA CONFIGURACIÓN DE TU PROYECTO FIREBASE ====== */
+const firebaseConfig = {
+  apiKey: "AIzaSyCp9Al8COqjLDxRBGrt1V_7nOZWFy-aCis",
+  authDomain: "credicoop.firebaseapp.com",
+  projectId: "credicoop",
+  storageBucket: "credicoop.firebasestorage.app",
+  messagingSenderId: "1078134106889",
+  appId: "1:1078134106889:web:953f1779fdccee944f01d8"
+};
+/* ================================================================ */
+
+const MAX = 3;                       // palabras por persona
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+let room = params.get("s");
+let isHost = params.get("host") === "1";
+let uid, db, mine = new Set(), words = [];
+const els = new Map();
+const hue = s => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+const COLORS = ["#2B59FF","#FF7A00","#00A676","#C2185B","#7B3FF2","#0099B8"];
+const color = s => COLORS[hue(s) % COLORS.length];
+const fail = e => { console.error(e); $("err").textContent = "Algo falló: " + (e.message || e); };
+
+try {
+  const app = initializeApp(firebaseConfig);
+  db = getFirestore(app);
+  const auth = getAuth(app);
+  await signInAnonymously(auth);
+  uid = auth.currentUser.uid;
+  room ? start() : $("crearV").classList.remove("hidden");
+} catch (e) { fail(e); }
+
+$("crear").onclick = async () => {
+  const q = $("pregunta").value.trim();
+  if (!q) return;
+  try {
+    room = Math.random().toString(36).slice(2, 8);
+    await setDoc(doc(db, "rooms", room), {question: q, owner: uid, createdAt: serverTimestamp()});
+    isHost = true;
+    history.replaceState(null, "", `?s=${room}&host=1`);
+    $("crearV").classList.add("hidden");
+    start();
+  } catch (e) { fail(e); }
+};
+$("pregunta").addEventListener("keydown", e => e.key === "Enter" && $("crear").click());
+
+function start() {
+  $("salaV").classList.remove("hidden");
+  $("rol").textContent = isHost ? "Pregunta de la sala" : "Respondé con una palabra";
+  const joinUrl = location.origin + location.pathname + "?s=" + room;
+
+  if (isHost) {
+    $("qrBox").classList.remove("hidden");
+    new QRCode($("qr"), {text: joinUrl, width: 190, height: 190});
+    $("link").textContent = joinUrl;
+  } else {
+    $("partBox").classList.remove("hidden");
+  }
+
+  onSnapshot(doc(db, "rooms", room), snap => {
+    $("q").textContent = snap.exists() ? snap.data().question : "Esta sala no existe.";
+  }, fail);
+
+  onSnapshot(collection(db, "rooms", room, "words"), snap => {
+    words = []; mine = new Set();
+    snap.forEach(d => {
+      words.push(d.data().word);
+      if (d.id.startsWith(uid + "_")) mine.add(d.id);
+    });
+    $("count").textContent = words.length + (words.length === 1 ? " palabra" : " palabras");
+    updateLeft();
+    render();
+  }, fail);
+}
+
+function updateLeft() {
+  const left = MAX - mine.size;
+  $("enviar").disabled = left <= 0;
+  $("palabra").disabled = left <= 0;
+  $("msg").textContent = left > 0
+    ? `Te ${left === 1 ? "queda 1 envío" : "quedan " + left + " envíos"} de ${MAX}.`
+    : "Listo, ya enviaste tus 3 palabras. Mirá cómo crece la nube.";
+}
+
+async function send() {
+  const w = $("palabra").value.trim();
+  if (!w) return;
+  if (/\s/.test(w)) { $("msg").textContent = "Una sola palabra por envío. Probá de nuevo."; return; }
+  const slot = [0, 1, 2].find(i => !mine.has(`${uid}_${i}`));
+  if (slot === undefined) return;
+  $("enviar").disabled = true;
+  try {
+    await setDoc(doc(db, "rooms", room, "words", `${uid}_${slot}`),
+      {word: w, uid, createdAt: serverTimestamp()});
+    $("palabra").value = "";
+    $("palabra").focus();
+  } catch (e) { fail(e); updateLeft(); }
+}
+$("enviar").onclick = send;
+$("palabra").addEventListener("keydown", e => e.key === "Enter" && send());
+
+function render() {
+  const m = new Map();
+  words.forEach(w => {
+    const k = w.toLocaleLowerCase("es");
+    const e = m.get(k) || {t: w, n: 0};
+    e.n++; m.set(k, e);
+  });
+  const list = [...m.entries()].sort((a, b) => b[1].n - a[1].n);
+  $("empty").classList.toggle("hidden", list.length > 0);
+
+  const c = $("cloud"), W = c.clientWidth, H = c.clientHeight;
+  const step = Math.min(W, H) * 0.15, stretch = W / H > 1.2 ? 1.7 : 1;
+  list.forEach(([k, {t, n}], i) => {
+    let el = els.get(k);
+    if (!el) {
+      el = document.createElement("span");
+      el.className = "w";
+      el.textContent = t;
+      el.style.color = color(k);
+      el.style.setProperty("--d", (-Math.random() * 6) + "s");
+      c.appendChild(el);
+      els.set(k, el);
+    }
+    const r = Math.sqrt(i) * step, a = i * 2.399;
+    const x = Math.max(60, Math.min(W - 60, W / 2 + r * Math.cos(a) * stretch));
+    const y = Math.max(30, Math.min(H - 30, H / 2 + r * Math.sin(a)));
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    el.style.fontSize = Math.min(22 + (n - 1) * 10, 76) + "px";
+  });
+}
+window.addEventListener("resize", render);
+</script>
+</body>
+</html>

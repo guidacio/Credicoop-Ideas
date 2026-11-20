@@ -1,0 +1,27 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Salas: cualquiera lee, solo se crean (no se editan ni se borran)
+    match /rooms/{room} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.owner == request.auth.uid
+        && request.resource.data.question is string
+        && request.resource.data.question.size() > 0
+        && request.resource.data.question.size() <= 200;
+    }
+
+    // Palabras: el id del documento es "<uid>_0", "<uid>_1" o "<uid>_2".
+    // Como solo se puede crear (no actualizar), cada persona envía como máximo 3.
+    match /rooms/{room}/words/{wid} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid
+        && wid.matches(request.auth.uid + '_[0-2]')
+        && request.resource.data.word is string
+        && request.resource.data.word.size() > 0
+        && request.resource.data.word.size() <= 30;
+    }
+  }
+}
